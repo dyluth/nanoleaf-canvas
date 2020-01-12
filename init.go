@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -28,9 +29,12 @@ func New(ip, apiKey string) *Canvas {
 }
 
 // GetNewAPIKey - to get a new API key fron teh nanoleaf.
-// need to run this within 30 seconds of activating pairing on the nanoleaf
+// A user is authorized to access the OpenAPI if they can demonstrate physical access of Panels.
+// This is achieved by:
+// Holding the on-off button down for 5-7 seconds until the LED starts flashing in a pattern
+// need to run this within 30 seconds of the above.
 func (c *Canvas) GetNewAPIKey() (string, error) {
-	resp, err := http.Post(fmt.Sprintf("%v/api/v1/new", c.IP), "", nil)
+	resp, err := http.Post(fmt.Sprintf("http://%v:16021/api/v1/new/", c.IP), "text/plain", nil)
 	if err != nil {
 		return "", err
 	}
@@ -45,30 +49,37 @@ func (c *Canvas) GetNewAPIKey() (string, error) {
 	return apiKey.AuthToken, err
 }
 
-type newAPIKeyResponseBody struct {
-	AuthToken string `json:"auth_token"`
-}
-
 // GetPanelInfo
 // TODO this just prints it out for the moment, but should return some sort of struct!
-func (c *Canvas) GetPanelInfo() error {
-	resp, err := http.Get(fmt.Sprintf("%v/api/v1/%v/", c.IP, c.APIKey))
+func (c *Canvas) GetPanelInfo() (PanelInfo, error) {
+	resp, err := http.Get(fmt.Sprintf("http://%v:16021/api/v1/%v/", c.IP, c.APIKey))
 	if err != nil {
-		return err
+		return PanelInfo{}, err
 	}
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("GetPanelInfo bad response from canvas: %v: %v", resp.StatusCode, resp.Status)
+		return PanelInfo{}, fmt.Errorf("GetPanelInfo bad response from canvas: %v: %v", resp.StatusCode, resp.Status)
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
-	fmt.Printf("GetPanelInfo return body: %v\n", body)
 	// TODO Parse this into actual struct we can use
-	return err
+	info := PanelInfo{}
+	err = json.Unmarshal(body, &info)
+	if err != nil {
+		return PanelInfo{}, err
+	}
+	/* // print out the json structure returned
+	infoPretty, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return PanelInfo{}, err
+	}
+	fmt.Printf("Panel Info:\n%v\n", string(infoPretty))
+	*/
+	return info, err
 }
 
 //GetEffectsList returns the list of effects that this canvas has
 func (c *Canvas) GetEffectsList() ([]string, error) {
-	resp, err := http.Get(fmt.Sprintf("%v/api/v1/%v/effects/effectsList", c.IP, c.APIKey))
+	resp, err := http.Get(fmt.Sprintf("http://%v:16021/api/v1/%v/effects/effectsList", c.IP, c.APIKey))
 	if err != nil {
 		return nil, err
 	}
@@ -79,4 +90,22 @@ func (c *Canvas) GetEffectsList() ([]string, error) {
 	err = json.NewDecoder(resp.Body).Decode(&effects)
 	defer resp.Body.Close()
 	return effects, err
+}
+
+// SetEffect sets the canvas to play the effect of the chosen name
+func (c *Canvas) SetEffect(effect string) error {
+	payload := strings.NewReader(fmt.Sprintf("{\"select\" : \"%v\"}", effect))
+
+	client := &http.Client{}
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%v:16021/api/v1/%v/effects", c.IP, c.APIKey), payload)
+
+	if err != nil {
+		fmt.Println(err)
+	}
+	req.Header.Add("Content-Type", "text/plain")
+
+	res, err := client.Do(req)
+	defer res.Body.Close()
+	_, err = ioutil.ReadAll(res.Body)
+	return err
 }
